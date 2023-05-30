@@ -1,0 +1,2 @@
+tqdm==4.65.0
+PyExifTool==0.5.5
