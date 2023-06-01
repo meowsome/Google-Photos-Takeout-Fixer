@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from exiftool import ExifToolHelper
 from exiftool.exceptions import ExifToolExecuteError
 import json
@@ -29,41 +30,39 @@ def deg_to_ref(deg, kind='lat'):
     }
     return compass[kind][0 if d >= 0 else 1]
 
-def attach_metadata(files):
-    # Iterate thru each provided file
-    for filepath in tqdm(files):
-        filename = filepath.split("/")[-1]
-        # Attempt to find metadata for this file
+def attach_metadata(filepath):
+    filename = filepath.split("/")[-1]
+    # Attempt to find metadata for this file
+    try:
+        with open(f'{filepath}.json') as json_file:
+            metadata = json.load(json_file)
+    except FileNotFoundError:
+        # If no metadata found, just raw copy to the output folder
+        shutil.copyfile(filepath, f'output/{filename}')
+    else:
+        timestamp_raw = int(metadata['photoTakenTime']['timestamp'])
+        timestamp = datetime.utcfromtimestamp(timestamp_raw).strftime("%Y:%m:%d %H:%M:%S")
+
+        tags = {"DateTimeOriginal": timestamp}
+        
+        # Only add lat and lon to metadata if they are available from original photo 
+        if metadata['geoData']['latitude'] != 0.0 and metadata['geoData']['longitude'] != 0.0:
+            tags['GPSLatitude'] = metadata['geoData']['latitude']
+            tags['GPSLatitudeRef'] = deg_to_ref(tags['GPSLatitude'])
+            tags['GPSLongitude'] = metadata['geoData']['longitude']
+            tags['GPSLongitudeRef'] = deg_to_ref(tags['GPSLongitude'], kind='lon')
+
+        # Set all metadata tags and export
         try:
-            with open(f'{filepath}.json') as json_file:
-                metadata = json.load(json_file)
-        except FileNotFoundError:
-            # If no metadata found, just raw copy to the output folder
-            shutil.copyfile(filepath, f'output/{filename}')
+            with ExifToolHelper() as et:
+                et.set_tags(
+                    [filepath],
+                    tags=tags,
+                    params=["-o", f"output/{filename}"] # Specify output file 
+                )
+        except ExifToolExecuteError:
+            shutil.copyfile(filepath, f'failures/{filename}')
         else:
-            timestamp_raw = int(metadata['photoTakenTime']['timestamp'])
-            timestamp = datetime.utcfromtimestamp(timestamp_raw).strftime("%Y:%m:%d %H:%M:%S")
-
-            tags = {"DateTimeOriginal": timestamp}
-            
-            # Only add lat and lon to metadata if they are available from original photo 
-            if metadata['geoData']['latitude'] != 0.0 and metadata['geoData']['longitude'] != 0.0:
-                tags['GPSLatitude'] = metadata['geoData']['latitude']
-                tags['GPSLatitudeRef'] = deg_to_ref(tags['GPSLatitude'])
-                tags['GPSLongitude'] = metadata['geoData']['longitude']
-                tags['GPSLongitudeRef'] = deg_to_ref(tags['GPSLongitude'], kind='lon')
-
-            # Set all metadata tags and export
-            try:
-                with ExifToolHelper() as et:
-                    et.set_tags(
-                        [filepath],
-                        tags=tags,
-                        params=["-o", f"output/{filename}"] # Specify output file 
-                    )
-            except ExifToolExecuteError:
-                shutil.copyfile(filepath, f'failures/{filename}')
-
             # Set last modified for file to correct date
             os.utime(f"output/{filename}", (timestamp_raw, timestamp_raw))
                 
@@ -97,6 +96,12 @@ for folder in os.listdir():
 
 os.chdir("../") # Go up to the project main directory
 
-attach_metadata(all_files) # Attach metadata for all image files, the meat of the work
+cores = os.cpu_count() / 3
+with tqdm(total=len(all_files)) as pbar:
+    with ThreadPoolExecutor(max_workers=cores) as ex:
+        futures = [ex.submit(attach_metadata, file) for file in all_files]
+        for future in as_completed(futures):
+            result = future.result()
+            pbar.update(1)
 
 # TODO Why does this file fail IMG_2113.PNG 
