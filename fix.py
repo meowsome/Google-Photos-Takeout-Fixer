@@ -32,6 +32,12 @@ def deg_to_ref(deg, kind='lat'):
 
 def attach_metadata(filepath):
     filename = filepath.split("/")[-1]
+
+    # If filename already exists in output, make it unique
+    if filename in os.listdir("output"):
+        filename_split = filename.split(".")
+        filename = f'{filename_split[0]}_{str(int(datetime.now().timestamp()))}.{filename_split[1]}'
+
     # Attempt to find metadata for this file
     try:
         with open(f'{filepath}.json') as json_file:
@@ -103,5 +109,3 @@ with tqdm(total=len(all_files)) as pbar:
         for future in as_completed(futures):
             result = future.result()
             pbar.update(1)
-
-# TODO Why does this file fail IMG_2113.PNG 
